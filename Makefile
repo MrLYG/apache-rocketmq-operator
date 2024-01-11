@@ -78,6 +78,14 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=rocketmq-operator crd:generateEmbeddedObjectMeta=true webhook paths="./..." output:dir=deploy output:crd:artifacts:config=deploy/crds
+	head -n 14 deploy/role_binding.yaml > deploy/role.yaml.bak
+	cat deploy/role.yaml >> deploy/role.yaml.bak
+	rm deploy/role.yaml && mv deploy/role.yaml.bak deploy/role.yaml && \
+    cp deploy/role.yaml charts/rocketmq-operator/templates/role.yaml && \
+    cp deploy/operator.yaml charts/rocketmq-operator/templates/operator.yaml && \
+    cp deploy/role_binding.yaml charts/rocketmq-operator/templates/role_binding.yaml && \
+    cp deploy/service_account.yaml charts/rocketmq-operator/templates/service_account.yaml && \
+    cp deploy/crds/* charts/rocketmq-operator/crds/
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -105,13 +113,21 @@ build: generate fmt vet ## Build manager binary.
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./main.go
 
+.PHONY: docker-buildx
+docker-buildx: ## Create a new docker builder to support --platform
+	docker buildx create --name multiarch --driver docker-container --use
+
 .PHONY: docker-build
-docker-build: test ## Build docker image with the manager.
-	docker build -t ${IMG} .
+docker-build: test docker-buildx ## Build docker image with the manager.
+	docker buildx build --platform linux/amd64 --load -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	docker push ${IMG}
+
+.PHONY: docker-image-release
+docker-build: test docker-buildx ## Build docker image with the manager.
+	docker buildx build --platform linux/amd64,linux/arm64 --push -t ${IMG} .
 
 ##@ Deployment
 
@@ -121,6 +137,7 @@ endif
 
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
+	kubectl apply -f deploy/crds/rocketmq.apache.org_controllers.yaml
 	kubectl create -f deploy/crds/rocketmq.apache.org_brokers.yaml
 	kubectl create -f deploy/crds/rocketmq.apache.org_nameservices.yaml
 	kubectl create -f deploy/crds/rocketmq.apache.org_consoles.yaml
@@ -129,6 +146,7 @@ install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~
 .PHONY: uninstall
 uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	kubectl delete --ignore-not-found=$(ignore-not-found) -f deploy/crds/rocketmq.apache.org_brokers.yaml
+	kubectl delete --ignore-not-found=$(ignore-not-found) -f deploy/crds/rocketmq.apache.org_controllers.yaml
 	kubectl delete --ignore-not-found=$(ignore-not-found) -f deploy/crds/rocketmq.apache.org_nameservices.yaml
 	kubectl delete --ignore-not-found=$(ignore-not-found) -f deploy/crds/rocketmq.apache.org_consoles.yaml
 	kubectl delete --ignore-not-found=$(ignore-not-found) -f deploy/crds/rocketmq.apache.org_topictransfers.yaml

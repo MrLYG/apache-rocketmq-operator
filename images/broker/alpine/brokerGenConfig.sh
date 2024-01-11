@@ -27,8 +27,14 @@ function create_config() {
     echo "brokerClusterName=$BROKER_CLUSTER_NAME" >> $BROKER_CONFIG_FILE
     echo "brokerName=$BROKER_NAME" >> $BROKER_CONFIG_FILE
     echo "brokerId=$BROKER_ID" >> $BROKER_CONFIG_FILE
+    echo "brokerIP1=`hostname -i`" >> $BROKER_CONFIG_FILE
     if [ $BROKER_ID != 0 ]; then
         sed -i 's/brokerRole=.*/brokerRole=SLAVE/g' $BROKER_CONFIG_FILE
+    fi
+
+    if [ "${enableControllerMode}" = "true" ]; then
+        echo "enableControllerMode=true" >> $BROKER_CONFIG_FILE
+        echo "controllerAddr=${controllerAddr}" >> $BROKER_CONFIG_FILE
     fi
 }
 

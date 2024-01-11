@@ -18,6 +18,15 @@
 // Package constants defines some global constants
 package constants
 
+import "os"
+
+var (
+	rocketmqHome = os.Getenv("ROCKETMQ_HOME")
+
+	// AdminToolDir is the RocketMQ Admin directory in operator image
+	AdminToolDir = rocketmqHome + "/bin/mqadmin"
+)
+
 const (
 	// TODO: get paths by container ENV or actual value instead of fixed constant
 	DataPath = "/root"
@@ -27,9 +36,6 @@ const (
 
 	// BasicCommand is basic command of exec function
 	BasicCommand = "sh"
-
-	// AdminToolDir is the RocketMQ Admin directory in operator image
-	AdminToolDir = "/home/rocketmq/operator/bin/mqadmin"
 
 	// StoreConfigDir is the directory of config file
 	StoreConfigDir = DataPath + "/store/config"
@@ -147,4 +153,23 @@ const (
 
 	// TopicListConsumerGroup is the consumer group field index of the output when using command check topic list
 	TopicListConsumerGroup = 2
+
+	// ControllerContainerName is the name of Controller container
+	ControllerContainerName = "controller"
+
+	// EnvControllerDLegerPeers is the container environment variable name of DLeger peers
+	// Format: {unique id}-{IP of that controller}
+	EnvControllerDLegerPeers = "controllerDLegerPeers"
+
+	// the container environment variable name of persistent storage directory
+	EnvControllerStorePath = "controllerStorePath"
+
+	// the container environment variable name of DLeger group
+	EnvControllerDLegerGroup = "controllerDLegerGroup"
+
+	// the container environment variable name of in Broker
+	EnvEnableControllerMode = "enableControllerMode"
+
+	// EnvControllerAddr is the container environment variable name of Controller address in Broker
+	EnvControllerAddr = "controllerAddr"
 )

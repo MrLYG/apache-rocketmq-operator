@@ -20,11 +20,12 @@ package broker
 
 import (
 	"context"
-	"github.com/google/uuid"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	rocketmqv1alpha1 "github.com/apache/rocketmq-operator/pkg/apis/rocketmq/v1alpha1"
 	cons "github.com/apache/rocketmq-operator/pkg/constants"
@@ -48,7 +49,6 @@ import (
 )
 
 var log = logf.Log.WithName("controller_broker")
-var isInitial = true
 var cmd = []string{"/bin/bash", "-c", "echo Initial broker"}
 
 /**
@@ -156,6 +156,15 @@ func (r *ReconcileBroker) Reconcile(ctx context.Context, request reconcile.Reque
 		share.NameServersStr = broker.Spec.NameServers
 	}
 
+	if broker.Spec.ClusterMode == "" {
+		broker.Spec.ClusterMode = "STATIC"
+	}
+
+	if broker.Spec.ClusterMode == "CONTROLLER" && share.ControllerAccessPoint == "" {
+		log.Info("Broker Waiting for Controller ready...")
+		return reconcile.Result{Requeue: true, RequeueAfter: time.Duration(cons.RequeueIntervalInSecond) * time.Second}, nil
+	}
+
 	share.BrokerClusterName = broker.Name
 	replicaPerGroup := broker.Spec.ReplicaPerGroup
 	reqLogger.Info("brokerGroupNum=" + strconv.Itoa(share.GroupNum) + ", replicaPerGroup=" + strconv.Itoa(replicaPerGroup))
@@ -258,10 +267,14 @@ func (r *ReconcileBroker) Reconcile(ctx context.Context, request reconcile.Reque
 	podNames := getPodNames(podList.Items)
 	log.Info("broker.Status.Nodes length = " + strconv.Itoa(len(broker.Status.Nodes)))
 	log.Info("podNames length = " + strconv.Itoa(len(podNames)))
-	// Ensure every pod is in running phase
+	// Ensure every pod is in ready
 	for _, pod := range podList.Items {
 		if !reflect.DeepEqual(pod.Status.Phase, corev1.PodRunning) {
 			log.Info("pod " + pod.Name + " phase is " + string(pod.Status.Phase) + ", wait for a moment...")
+		}
+		if !isReady(pod) {
+			reqLogger.Info("pod " + pod.Name + " is not ready, wait for a moment...")
+			return reconcile.Result{Requeue: true, RequeueAfter: time.Duration(cons.RequeueIntervalInSecond) * time.Second}, nil
 		}
 	}
 
@@ -389,16 +402,29 @@ func getBrokerName(broker *rocketmqv1alpha1.Broker, brokerGroupIndex int) string
 	return broker.Name + "-" + strconv.Itoa(brokerGroupIndex)
 }
 
+func isReady(po corev1.Pod) bool {
+	for _, cond := range po.Status.Conditions {
+		if cond.Type == corev1.PodReady {
+			return cond.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
 // getBrokerStatefulSet returns a broker StatefulSet object
 func (r *ReconcileBroker) getBrokerStatefulSet(broker *rocketmqv1alpha1.Broker, brokerGroupIndex int, replicaIndex int) *appsv1.StatefulSet {
 	ls := labelsForBroker(broker.Name)
 	var a int32 = 1
 	var c = &a
 	var statefulSetName string
-	if replicaIndex == 0 {
-		statefulSetName = broker.Name + "-" + strconv.Itoa(brokerGroupIndex) + "-master"
-	} else {
-		statefulSetName = broker.Name + "-" + strconv.Itoa(brokerGroupIndex) + "-replica-" + strconv.Itoa(replicaIndex)
+	if broker.Spec.ClusterMode == "STATIC" {
+		if replicaIndex == 0 {
+			statefulSetName = broker.Name + "-" + strconv.Itoa(brokerGroupIndex) + "-master"
+		} else {
+			statefulSetName = broker.Name + "-" + strconv.Itoa(brokerGroupIndex) + "-replica-" + strconv.Itoa(replicaIndex)
+		}
+	} else if broker.Spec.ClusterMode == "CONTROLLER" {
+		statefulSetName = broker.Name + "-" + strconv.Itoa(brokerGroupIndex) + "-" + strconv.Itoa(replicaIndex)
 	}
 
 	// After CustomResourceDefinition version upgraded from v1beta1 to v1
@@ -426,11 +452,14 @@ func (r *ReconcileBroker) getBrokerStatefulSet(broker *rocketmqv1alpha1.Broker, 
 					Labels: ls,
 				},
 				Spec: corev1.PodSpec{
-					Affinity:          broker.Spec.Affinity,
-					Tolerations:       broker.Spec.Tolerations,
-					NodeSelector:      broker.Spec.NodeSelector,
-					PriorityClassName: broker.Spec.PriorityClassName,
-					ImagePullSecrets:  broker.Spec.ImagePullSecrets,
+					ServiceAccountName: broker.Spec.ServiceAccountName,
+					HostNetwork:        broker.Spec.HostNetwork,
+					DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
+					Affinity:           broker.Spec.Affinity,
+					Tolerations:        broker.Spec.Tolerations,
+					NodeSelector:       broker.Spec.NodeSelector,
+					PriorityClassName:  broker.Spec.PriorityClassName,
+					ImagePullSecrets:   broker.Spec.ImagePullSecrets,
 					Containers: []corev1.Container{{
 						Resources: broker.Spec.Resources,
 						Image:     broker.Spec.BrokerImage,
@@ -497,6 +526,10 @@ func getENV(broker *rocketmqv1alpha1.Broker, replicaIndex int, brokerGroupIndex 
 		Name:  cons.EnvBrokerName,
 		Value: broker.Name + "-" + strconv.Itoa(brokerGroupIndex),
 	}}
+	if broker.Spec.ClusterMode == "CONTROLLER" {
+		envs = append(envs, corev1.EnvVar{Name: cons.EnvEnableControllerMode, Value: "true"})
+		envs = append(envs, corev1.EnvVar{Name: cons.EnvControllerAddr, Value: share.ControllerAccessPoint})
+	}
 	envs = append(envs, broker.Spec.Env...)
 	return envs
 }
@@ -575,27 +608,4 @@ func getPodNames(pods []corev1.Pod) []string {
 		podNames = append(podNames, pod.Name)
 	}
 	return podNames
-}
-
-func contains(item string, arr []string) bool {
-	for _, value := range arr {
-		if reflect.DeepEqual(value, item) {
-			return true
-		}
-	}
-	return false
-}
-
-func checkAndCopyMetadata(newPodNames []string, dir string, sourcePodName string, namespace string, k8s *tool.K8sClient) {
-	cmdOpts := buildInputCommand(dir)
-	jsonStr, _ := exec(cmdOpts, sourcePodName, k8s, namespace) // TODO handler error
-	if len(jsonStr) < cons.MinMetadataJsonFileSize {
-		log.Info("The file " + dir + " is abnormally too short to execute metadata transmission, please check whether the source broker pod " + sourcePodName + " is correct")
-	} else {
-		// for each new pod, copy the metadata from the scale source pod
-		for _, newPodName := range newPodNames {
-			cmdOpts = buildOutputCommand(jsonStr, dir)
-			exec(cmdOpts, newPodName, k8s, namespace)
-		}
-	}
 }

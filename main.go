@@ -19,12 +19,14 @@ package main
 
 import (
 	"flag"
+	"os"
+
 	rocketmqv1alpha1 "github.com/apache/rocketmq-operator/pkg/apis/rocketmq/v1alpha1"
 	"github.com/apache/rocketmq-operator/pkg/controller/broker"
 	"github.com/apache/rocketmq-operator/pkg/controller/console"
+	rmqcontroller "github.com/apache/rocketmq-operator/pkg/controller/controller"
 	"github.com/apache/rocketmq-operator/pkg/controller/nameservice"
 	"github.com/apache/rocketmq-operator/pkg/controller/topictransfer"
-	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -41,6 +43,7 @@ import (
 
 //+kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 var (
 	scheme   = runtime.NewScheme()
@@ -58,6 +61,8 @@ func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
+	var watchNamespace string
+	flag.StringVar(&watchNamespace, "watch-namespace", os.Getenv("WATCH_NAMESPACE"), "The namespace to watch, if not specified, all namespaces will be watched")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8383", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -78,6 +83,7 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "2516c052.apache.org",
+		Namespace:              watchNamespace,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -102,6 +108,11 @@ func main() {
 
 	if err := topictransfer.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to add topictransfer controller to manager")
+		os.Exit(1)
+	}
+
+	if err := rmqcontroller.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to add dledger controller to manager")
 		os.Exit(1)
 	}
 
